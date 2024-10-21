@@ -49,6 +49,7 @@ def save_to_csv(filename: str, title, position, price):
         csv_writer.writerow([title, position, price])
     logging.info(f"Data saved: {title}, {position}, {price}")
 
+
 def get_data(data, filename) -> bool:
     logging.info("Entering get_data function")
     selector = parsel.Selector(data)
@@ -56,30 +57,34 @@ def get_data(data, filename) -> bool:
     divs = selector.xpath(xpath_expression)
 
     if not divs:
-        logging.warning("No property divs found. The page structure might have changed.")
+        logging.warning(
+            "No property divs found. The page structure might have changed.")
+        print("无法解析页面信息！")
         return False
 
     data_found = False
     for div in divs:
         title = div.xpath(".//div[@class='property-content']//h3/text()").get()
-        position = div.xpath(".//div[@class='property-content-info property-content-info-comm']//span/text()").get()
+        positions = div.xpath(
+            ".//p[@class='property-content-info-comm-address']/span/text()").getall()
+        position = '-'.join(positions) if positions else '未知位置'
         price = div.xpath(".//div[@class='property-price']//span/text()").get()
 
-        if title and position and price:
-            logging.info(f"Extracted: {title}\t{position}\t{price}")
-            save_to_csv(filename, title, position, price)
-            data_found = True
-        else:
-            logging.warning(f"Incomplete data: title={title}, position={position}, price={price}")
+        print(f"{title}, {position}, {price}")
+        logging.info(f"Extracted: {title}\t{position}\t{price}")
+        save_to_csv(filename, title, position, price)
+        data_found = True
 
     logging.info(f"Exiting get_data function. Data found: {data_found}")
     return data_found
+
 
 def fetch_page(url, headers, proxies, max_retries=5, delay=5):
     for attempt in range(max_retries):
         try:
             logging.info(f"Attempting to fetch {url}")
-            response = requests.get(url=url, headers=headers, proxies=proxies, timeout=30)
+            response = requests.get(
+                url=url, headers=headers, proxies=proxies, timeout=30)
             response.raise_for_status()
             logging.info(f"Successfully fetched {url}")
             return response.text, None
@@ -94,6 +99,7 @@ def fetch_page(url, headers, proxies, max_retries=5, delay=5):
                 logging.error(f"Max retries reached. Unable to fetch {url}")
                 return None, error_message
 
+
 if __name__ == "__main__":
     ip, port = get_proxy()  # 确保这个函数正确实现
     proxies = {
@@ -106,40 +112,49 @@ if __name__ == "__main__":
     }
 
     base_url = "https://wuhan.anjuke.com/sale/p{}/?from=esf_list"
-    filename = "./data/anjuke_data_01.csv"
+    filename = "./data/anjuke_data_03.csv"
 
     page = 1
-    consecutive_name_resolution_errors = 0
-    max_consecutive_name_resolution_errors = 5
+    consecutive_name_resolution_errors = 0  # 用于记录解析错误次数
+    max_consecutive_name_resolution_errors = 5  # 最大解析次数
+
+    consecutive_empty_pages = 0  # 记录连续空页次数
+    max_empty_pages = 10  # 设置最大连续空页数
 
     while True:
-        url = base_url.format(page)
-        logging.info(f"Processing page {page}: {url}")
 
+        url = base_url.format(page)
+        print(f"正在爬取第 {page} 页: {url}")
+
+        # 获取 HTML
         html_data, error = fetch_page(url, headers, proxies)
 
         if html_data is None:
             if "NameResolutionError" in error:
                 consecutive_name_resolution_errors += 1
-                logging.warning(f"Consecutive name resolution error count: {consecutive_name_resolution_errors}")
+                logging.warning(
+                    f"连续第 {consecutive_name_resolution_errors} 次遇到名称解析错误！")
                 if consecutive_name_resolution_errors >= max_consecutive_name_resolution_errors:
-                    logging.error(f"Reached maximum allowed consecutive name resolution errors ({max_consecutive_name_resolution_errors}). Stopping.")
+                    logging.error(f"达到最大连续名称解析错误次数，爬取终止！")
                     break
             else:
-                logging.error(f"Failed to fetch page {page} due to non-name resolution error. Continuing to next page.")
+                logging.error(f"无法获取第 {page} 页，错误信息: {error}，继续尝试下一页")
                 page += 1
                 continue
         else:
             consecutive_name_resolution_errors = 0
-            logging.info(f"Successfully fetched page {page}. Attempting to extract data.")
 
             if not get_data(data=html_data, filename=filename):
-                logging.info(f"No data found on page {page}. Stopping.")
-                break
+                consecutive_empty_pages += 1
+                if consecutive_empty_pages >= max_empty_pages:
+                    logging.info(f"连续 {max_empty_pages} 页没有数据，爬取终止。")
+                    break
+            else:
+                consecutive_empty_pages = 0  # 重置空页计数器
+                print(f"第 {page} 页数据成功爬取并保存。")
 
-        wait_time = random.uniform(5, 10)
-        logging.info(f"Waiting for {wait_time:.2f} seconds before next request.")
-        sleep(wait_time)
+        # 随机休眠一段时间，模拟人类行为，避免被封禁
+        sleep_time = random.uniform(2, 5)
+        print(f"等待 {sleep_time:.2f} 秒后继续...")
+        sleep(sleep_time)
         page += 1
-
-    logging.info("Scraping finished.")
